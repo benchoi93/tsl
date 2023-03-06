@@ -126,6 +126,7 @@ class SpatioTemporalDataset(Dataset, DataParsingMixin):
                  window: int = 12,
                  horizon: int = 1,
                  delay: int = 0,
+                 batch_delay: int = 3,
                  stride: int = 1,
                  window_lag: int = 1,
                  horizon_lag: int = 1,
@@ -175,6 +176,9 @@ class SpatioTemporalDataset(Dataset, DataParsingMixin):
         # Set dataset's target signals
         self.target: Tensor = self._parse_target(target)
 
+        self.target = torch.concat([self.target[i:-(batch_delay-i)] for i in range(batch_delay)], -1).unsqueeze(-1)
+        mask = np.expand_dims(np.concatenate([mask[i:-(batch_delay-i)] for i in range(batch_delay)], -1), -1)
+
         # Store mask
         self.mask: Optional[Tensor] = None
         self.set_mask(mask)
@@ -188,6 +192,7 @@ class SpatioTemporalDataset(Dataset, DataParsingMixin):
         self.reset_input_map()
         if covariates is not None:
             for name, value in covariates.items():
+                value = np.stack([value[i:-(batch_delay-i)] for i in range(batch_delay)], -1)
                 self.add_covariate(name, **self._value_to_kwargs(value))
 
         # Updated input map (i.e., how to map data, exogenous and attribute
@@ -1150,7 +1155,7 @@ class SpatioTemporalDataset(Dataset, DataParsingMixin):
         ts1 = self.expand_indices(idxs1)[synch_mode.lower()].numpy()
         ts2 = self.expand_indices(idxs2)[synch_mode.lower()].numpy()
         common_ts = np.intersect1d(ts1, ts2)
-        is_overlapping = lambda sample: np.any(np.in1d(sample, common_ts))
+        def is_overlapping(sample): return np.any(np.in1d(sample, common_ts))
         m1 = np.apply_along_axis(is_overlapping, 1, ts1)
         m2 = np.apply_along_axis(is_overlapping, 1, ts2)
         if as_mask:

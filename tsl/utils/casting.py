@@ -16,6 +16,8 @@ def to_time_nodes_channels(obj):
         obj = rearrange(obj, 't (n f) -> t n f', f=1)
     elif obj.ndim == 1:  # [time] -> [time, 1 node, 1 feature]
         obj = rearrange(obj, '(t n f) -> t n f', n=1, f=1)
+    elif obj.ndim == 4:
+        obj = obj
     elif obj.ndim != 3:
         raise ValueError(f'Invalid data dimensions {obj.shape}')
     return obj

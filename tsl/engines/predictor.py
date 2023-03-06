@@ -10,6 +10,8 @@ from tsl.data import Data
 from tsl.metrics.torch import MaskedMetric
 from tsl.nn.models import BaseModel
 from tsl.utils import foo_signature
+from tsl.engines.better_loss import batch_opt
+
 
 class Predictor(pl.LightningModule):
     """:class:`~pytorch_lightning.core.LightningModule` to implement predictors.
@@ -145,7 +147,7 @@ class Predictor(pl.LightningModule):
     def filter_forward_kwargs(self) -> bool:
         """"""
         return self._model_fwd_signature is not None and \
-               not self._model_fwd_signature['has_kwargs']
+            not self._model_fwd_signature['has_kwargs']
 
     def _filter_forward_kwargs(self, kwargs: dict) -> dict:
         """"""
@@ -177,6 +179,9 @@ class Predictor(pl.LightningModule):
 
     @staticmethod
     def _check_metric(metric, on_step=False):
+        if isinstance(metric, batch_opt):
+            return metric
+
         if not isinstance(metric, MaskedMetric):
             if 'reduction' in inspect.getfullargspec(metric).args:
                 metric_kwargs = {'reduction': 'none'}
@@ -253,6 +258,13 @@ class Predictor(pl.LightningModule):
                 method.
         """
         inputs, targets, mask, transform = self._unpack_batch(batch)
+
+        b, t, n, d, f = inputs['x'].shape
+        inputs['x'] = inputs['x'].permute(0, 3, 1, 2, 4).reshape(b*d, t, n, f)
+        inputs['u'] = inputs['u'].permute(0, 3, 1, 2).reshape(b*d, t, inputs['u'].shape[2])
+        targets['y'] = targets['y'].permute(0, 3, 1, 2, 4).reshape(b*d, t, n, f)
+        mask = mask.permute(0, 3, 1, 2, 4).reshape(b*d, t, n, f)
+
         if preprocess:
             for key, trans in transform.items():
                 if key in inputs:
@@ -261,6 +273,7 @@ class Predictor(pl.LightningModule):
         if forward_kwargs is None:
             forward_kwargs = dict()
         y_hat = self.forward(**inputs, **forward_kwargs)
+        y_hat = y_hat.reshape(b, d, t, n, f).permute(0, 2, 3, 1, 4)
         # Rescale outputs
         if postprocess:
             trans = transform.get('y')
@@ -268,6 +281,8 @@ class Predictor(pl.LightningModule):
                 y_hat = trans.inverse_transform(y_hat)
         if return_target:
             y = targets.get('y')
+            y = y.reshape(b, d, t, n, f).permute(0, 2, 3, 1, 4)
+            mask = mask.reshape(b, d, t, n, f).permute(0, 2, 3, 1, 4)
             return y, y_hat, mask
         return y_hat
 
@@ -355,9 +370,8 @@ class Predictor(pl.LightningModule):
     def test_step(self, batch, batch_idx):
         """"""
         # Compute outputs and rescale
-        y_hat = self.predict_batch(batch, preprocess=False, postprocess=True)
-
-        y, mask = batch.y, batch.get('mask')
+        y, y_hat, mask = self.predict_batch(batch, preprocess=False, postprocess=True, return_target=True)
+        # y, mask = batch.y, batch.get('mask')
         test_loss = self.loss_fn(y_hat, y, mask)
 
         # Logging

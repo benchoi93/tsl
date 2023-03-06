@@ -1,6 +1,14 @@
 defaults:
   - default
   - _self_
+  
+batch_size: 64
+
+batch_opt:
+  batch_delay: 1
+  train_L_batch: false
+  train_L_time: false
+  train_L_space: false
 
 model:
   name: dcrnn
@@ -24,3 +32,7 @@ lr_scheduler:
   hparams:
     gamma: 0.1
     milestones: [ 20, 30, 40 ]
+
+wandb:
+  offline: false
+  project: "tsl_traffic"

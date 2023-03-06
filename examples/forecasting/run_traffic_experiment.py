@@ -1,3 +1,4 @@
+import wandb
 import torch
 from omegaconf import DictConfig
 from pytorch_lightning import Trainer
@@ -14,6 +15,7 @@ from tsl.engines import Predictor
 from tsl.metrics import torch as torch_metrics, numpy as numpy_metrics
 from tsl.nn import models
 from tsl.utils.casting import torch_to_numpy
+from tsl.engines.better_loss import batch_opt
 
 
 def get_model_class(model_str):
@@ -67,6 +69,21 @@ def get_dataset(dataset_name):
 
 
 def run_traffic(cfg: DictConfig):
+    wandb.init(project="tsl_traffic", config=dict(
+        model=cfg.model.name,
+        **cfg.model.hparams,
+        **cfg.batch_opt,
+    )
+    )
+
+    cfg.batch_opt.train_L_batch = True if wandb.config.train_L_batch == 1 else False
+    cfg.batch_opt.train_L_space = True if wandb.config.train_L_space == 1 else False
+    cfg.batch_opt.train_L_time = True if wandb.config.train_L_time == 1 else False
+    cfg.batch_opt.batch_delay = wandb.config.batch_delay
+    print(
+        f"train_L_batch: {cfg.batch_opt.train_L_batch}, train_L_space: {cfg.batch_opt.train_L_space}, train_L_time: {cfg.batch_opt.train_L_time}, delay: {cfg.batch_opt.batch_delay}"
+    )
+
     ########################################
     # data module                          #
     ########################################
@@ -84,16 +101,17 @@ def run_traffic(cfg: DictConfig):
                                           covariates=covariates,
                                           horizon=cfg.horizon,
                                           window=cfg.window,
-                                          stride=cfg.stride)
+                                          stride=cfg.stride,
+                                          batch_delay=cfg.batch_opt.batch_delay,)
     transform = {
-        'target': StandardScaler(axis=(0, 1))
+        'target': StandardScaler(axis=(0, 1, 2))
     }
 
     dm = SpatioTemporalDataModule(
         dataset=torch_dataset,
         scalers=transform,
         splitter=dataset.get_splitter(**cfg.dataset.splitting),
-        batch_size=cfg.batch_size,
+        batch_size=cfg.batch_size//cfg.batch_opt.batch_delay,
         workers=cfg.workers
     )
     dm.setup()
@@ -105,15 +123,26 @@ def run_traffic(cfg: DictConfig):
     model_cls = get_model_class(cfg.model.name)
 
     model_kwargs = dict(n_nodes=torch_dataset.n_nodes,
-                        input_size=torch_dataset.n_channels,
-                        output_size=torch_dataset.n_channels,
+                        input_size=1,
+                        output_size=1,
+                        # input_size=torch_dataset.n_channels,
+                        # output_size=torch_dataset.n_channels,
                         horizon=torch_dataset.horizon,
-                        exog_size=torch_dataset.input_map.u.shape[-1])
+                        exog_size=torch_dataset.input_map.u.shape[-2])
 
     model_cls.filter_model_args_(model_kwargs)
     model_kwargs.update(cfg.model.hparams)
 
-    loss_fn = torch_metrics.MaskedMAE(compute_on_step=True)
+    # loss_fn = torch_metrics.MaskedMAE(compute_on_step=True)
+    #
+    # loss_fn = torch_metrics.MaskedMSE(compute_on_step=True)
+    #
+    loss_fn = batch_opt(num_nodes=torch_dataset.n_nodes,
+                        pred_len=torch_dataset.horizon,
+                        delay=cfg.batch_opt.batch_delay,
+                        train_L_batch=cfg.batch_opt.train_L_batch,
+                        train_L_space=cfg.batch_opt.train_L_space,
+                        train_L_time=cfg.batch_opt.train_L_time,)
 
     log_metrics = {'mae': torch_metrics.MaskedMAE(),
                    'mse': torch_metrics.MaskedMSE(),
@@ -193,8 +222,14 @@ def run_traffic(cfg: DictConfig):
     output = trainer.predict(predictor, dataloaders=dm.test_dataloader())
     output = torch_to_numpy(output)
     y_hat, y_true, mask = output['y_hat'], \
-                          output['y'], \
-                          output.get('mask', None)
+        output['y'], \
+        output.get('mask', None)
+
+    y_true = y_true.reshape([y_true.shape[0]//cfg.batch_opt.batch_delay, cfg.batch_opt.batch_delay]+list(y_true.shape[1:]))
+    y_true = y_true[:, 0, ...]
+    y_hat = y_hat[:, :, :, 0, :]
+    mask = mask[:, :, :, 0, :]
+
     res = dict(test_mae=numpy_metrics.mae(y_hat, y_true, mask),
                test_rmse=numpy_metrics.rmse(y_hat, y_true, mask),
                test_mape=numpy_metrics.mape(y_hat, y_true, mask))
@@ -202,8 +237,13 @@ def run_traffic(cfg: DictConfig):
     output = trainer.predict(predictor, dataloaders=dm.val_dataloader())
     output = torch_to_numpy(output)
     y_hat, y_true, mask = output['y_hat'], \
-                          output['y'], \
-                          output.get('mask', None)
+        output['y'], \
+        output.get('mask', None)
+    y_true = y_true.reshape([y_true.shape[0]//cfg.batch_opt.batch_delay, cfg.batch_opt.batch_delay]+list(y_true.shape[1:]))
+    y_true = y_true[:, 0, ...]
+    y_hat = y_hat[:, :, :, 0, :]
+    mask = mask[:, :, :, 0, :]
+
     res.update(dict(val_mae=numpy_metrics.mae(y_hat, y_true, mask),
                     val_rmse=numpy_metrics.rmse(y_hat, y_true, mask),
                     val_mape=numpy_metrics.mape(y_hat, y_true, mask)))

@@ -2,6 +2,12 @@ defaults:
   - default
   - _self_
 
+batch_opt:
+  batch_delay: 1
+  train_L_batch: false
+  train_L_time: false
+  train_L_space: false
+
 model:
   name: agcrn
   hparams:
@@ -14,3 +20,8 @@ optimizer:
     lr: 0.003
 
 lr_scheduler: null
+
+
+wandb:
+  offline: false
+  project: "tsl_traffic"

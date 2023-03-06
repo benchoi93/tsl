@@ -233,7 +233,7 @@ class batch_opt(nn.Module):
         return nll
 
     def get_nll_MGD(self, mu, target, L_list):
-        b, d, n, t = mu.shape
+        b, d, n, t, f = mu.shape
 
         # mu = mu.unsqueeze(1)
 
@@ -245,6 +245,7 @@ class batch_opt(nn.Module):
         L_list = [l.transpose(-1, -2).unsqueeze(0).repeat(b, 1, 1, 1) for l in L_list]
         logdet = [l.diagonal(dim1=-1, dim2=-2).log().sum(-1) for l in L_list]
 
+        R_ext = R_ext.permute(0, 4, 3, 2, 1)
         L_x = kron_vec_prod(L_list, R_ext, align=2)
         mahabolis = L_x.pow(2).sum((-1, -2, -3))
 
@@ -254,7 +255,7 @@ class batch_opt(nn.Module):
         nll = -(-dnt/2 * math.log(2*math.pi) - 0.5 * mahabolis + logdet)
 
         # nll = - torch.logsumexp(nll, dim=1)
-        return nll
+        return nll.mean()
 
     def masked_mse(self, pred, target, mask):
         if self.nll == "GAL":

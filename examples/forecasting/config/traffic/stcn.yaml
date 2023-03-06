@@ -6,6 +6,12 @@ batch_size: 64
 l2_reg: 0.0001
 lr: 0.001
 
+batch_opt:
+  batch_delay: 1
+  train_L_batch: false
+  train_L_time: false
+  train_L_space: false
+
 model:
   name: stcn
   hparams:
@@ -27,3 +33,7 @@ optimizer:
     lr: 0.01
 
 lr_scheduler: null
+
+wandb:
+  offline: false
+  project: "tsl_traffic"
